@@ -7,6 +7,9 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Get the files from the repository
         uses: actions/checkout@v4
@@ -21,14 +24,59 @@ jobs:
         with:
           python-version: '3.11'
 
-      # The Windows files can be uploaded from a phone as one small ZIP
-      # (GitHub's website cannot take folders). Open it first.
-      - name: Open the Windows part (if uploaded as a ZIP)
-        run: python -c "import glob,zipfile;[zipfile.ZipFile(z).extractall('.') for z in glob.glob('LILKESSphoto-part4-windows*.zip')]"
+      # Opens all 4 ZIP parts (found anywhere in the repo, even if renamed like
+      # "part2-store (1).zip") and puts everything in the right place.
+      # It does not depend on any other file in the repo, and prints what it sees.
+      - name: Open the 4 ZIP parts and assemble the project
+        run: |
+          python - <<'PY'
+          import os, sys, zipfile, shutil, re
 
-      # Works whether you uploaded the 3 ZIP parts or already extracted them.
-      - name: Assemble the project (www, store pictures, AI models)
-        run: python desktop/scripts/assemble.py
+          def find_zip(tag):
+              hits = []
+              for dp, dn, fn in os.walk('.'):
+                  dn[:] = [d for d in dn if d not in ('node_modules', '.git', 'release', '_www')]
+                  for f in fn:
+                      if f.lower().endswith('.zip') and re.search(r'part\s*' + tag, f.lower()):
+                          hits.append(os.path.join(dp, f))
+              return sorted(hits)
+
+          print('Files at repo top:', sorted(os.listdir('.')))
+          bad = False
+          for tag, label in (('1', 'app'), ('2', 'store'), ('3', 'models'), ('4', 'windows')):
+              hits = find_zip(tag)
+              if not hits:
+                  print(f'ERROR: no ZIP for part{tag} ({label}) found in the repository.')
+                  bad = True
+                  continue
+              for z in hits:
+                  zf = zipfile.ZipFile(z)
+                  names = [n for n in zf.namelist() if not n.endswith('/')]
+                  print(f'part{tag}: {z}  ({len(names)} files, first: {names[0] if names else "-"})')
+                  zf.extractall('.')
+          if bad:
+              print('Upload the missing ZIP file(s) to the top of the repository and run again.')
+              sys.exit(1)
+
+          # Safety: if a part was packed with a different top folder, move things into www/
+          def count(d): return len(os.listdir(d)) if os.path.isdir(d) else 0
+          for d in ('store', 'models', 'css', 'js', 'img', 'fonts'):
+              if not os.path.isdir('www/' + d) and os.path.isdir(d):
+                  print('Moving', d, '-> www/' + d)
+                  os.makedirs('www', exist_ok=True)
+                  shutil.move(d, 'www/' + d)
+
+          print('www/index.html :', os.path.isfile('www/index.html'))
+          print('www/store files:', count('www/store'))
+          print('www/models files:', count('www/models'))
+          print('desktop/main.js:', os.path.isfile('desktop/main.js'))
+          ok = (os.path.isfile('www/index.html') and count('www/store') >= 100
+                and count('www/models') >= 2 and os.path.isfile('desktop/main.js'))
+          if not ok:
+              print('ERROR: something is still missing after opening the ZIPs (see numbers above).')
+              sys.exit(1)
+          print('Project assembled OK')
+          PY
 
       - name: Install Electron and Electron Builder
         working-directory: desktop
@@ -40,7 +88,6 @@ jobs:
 
       - name: List what was built
         working-directory: desktop
-        shell: bash
         run: ls -la release
 
       - name: Keep the installer for download
@@ -54,11 +101,11 @@ jobs:
 
       - name: Report a problem (only runs if something failed)
         if: failure()
-        shell: bash
         run: |
           {
             echo "## Windows build failed"
             echo "Open the red step above and send its last lines to Claude."
             echo "www/store files: $(ls www/store 2>/dev/null | wc -l)  www/models files: $(ls www/models 2>/dev/null | wc -l)"
+            echo "(0 here usually means the ZIP step failed first - read that step.)"
           } >> "$GITHUB_STEP_SUMMARY"
           
