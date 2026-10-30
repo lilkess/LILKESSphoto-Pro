@@ -1,0 +1,64 @@
+name: Build Windows App
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Get the files from the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The Windows files can be uploaded from a phone as one small ZIP
+      # (GitHub's website cannot take folders). Open it first.
+      - name: Open the Windows part (if uploaded as a ZIP)
+        run: python -c "import glob,zipfile;[zipfile.ZipFile(z).extractall('.') for z in glob.glob('LILKESSphoto-part4-windows*.zip')]"
+
+      # Works whether you uploaded the 3 ZIP parts or already extracted them.
+      - name: Assemble the project (www, store pictures, AI models)
+        run: python desktop/scripts/assemble.py
+
+      - name: Install Electron and Electron Builder
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Build the Windows installer and portable app
+        working-directory: desktop
+        run: npm run dist
+
+      - name: List what was built
+        working-directory: desktop
+        shell: bash
+        run: ls -la release
+
+      - name: Keep the installer for download
+        uses: actions/upload-artifact@v4
+        with:
+          name: LILKESSphoto-Pro-Windows
+          path: |
+            desktop/release/LILKESSphoto-Pro-Setup.exe
+            desktop/release/LILKESSphoto-Pro-Portable.exe
+          if-no-files-found: error
+
+      - name: Report a problem (only runs if something failed)
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "## Windows build failed"
+            echo "Open the red step above and send its last lines to Claude."
+            echo "www/store files: $(ls www/store 2>/dev/null | wc -l)  www/models files: $(ls www/models 2>/dev/null | wc -l)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          
